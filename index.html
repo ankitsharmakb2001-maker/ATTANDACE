@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Attendance App (Face + Location)</title>
+  <style>
+    body { font-family: Arial, sans-serif; background:#f4f4f9; margin:0; padding:0; }
+    .container { width:360px; margin:20px auto; background:#fff; padding:20px; border-radius:10px; box-shadow:0 0 10px rgba(0,0,0,0.2); }
+    h2,h3 { text-align:center; }
+    input, select, button { width:100%; padding:10px; margin:5px 0; border:1px solid #ccc; border-radius:5px; }
+    button { background:#007bff; color:white; cursor:pointer; }
+    button:hover { background:#0056b3; }
+    video { border:1px solid #ccc; border-radius:5px; margin:5px 0; }
+    #map { width:100%; height:250px; margin-top:10px; border-radius:5px; }
+  </style>
+  <!-- face-api.js -->
+  <script src="https://unpkg.com/face-api.js@0.22.2/dist/face-api.min.js"></script>
+</head>
+<body>
+  <div class="container">
+
+    <!-- LOGIN -->
+    <div id="loginSection">
+      <h2>Login</h2>
+      <input type="text" id="username" placeholder="Username" required>
+      <input type="password" id="password" placeholder="Password" required>
+      <select id="role">
+        <option value="">Select Role</option>
+        <option value="admin">Admin</option>
+        <option value="staff">Staff</option>
+      </select>
+      <button onclick="login()">Login</button>
+      <p style="margin-top:10px;">
+        <a href="#" id="forgotPassword">Forgot Admin Password?</a>
+      </p>
+    </div>
+
+    <!-- ADMIN DASHBOARD -->
+    <div id="adminDashboard" style="display:none;">
+      <h2>Welcome, Admin</h2>
+      <button onclick="logout()">Logout</button>
+
+      <h3>Manage Staff</h3>
+      <button onclick="addStaff()">Add Staff</button>
+      <button onclick="editStaff()">Edit Staff</button>
+
+      <h3>Attendance Reports</h3>
+      <button onclick="exportAttendance()">📥 Export Attendance</button>
+
+      <h3>Edit Profile</h3>
+      <input type="text" id="newAdminName" placeholder="New Name">
+      <input type="password" id="newAdminPass" placeholder="New Password">
+      <button onclick="updateAdminProfile()">Update Profile</button>
+
+      <h3>Set Location Control</h3>
+      <input type="text" id="adminLat" placeholder="Latitude">
+      <input type="text" id="adminLon" placeholder="Longitude">
+      <input type="number" id="adminRadius" placeholder="Radius (meters)">
+      <button onclick="setLocationControl()">Save Location Control</button>
+
+      <h3>Enroll Staff Face</h3>
+      <video id="enrollVideo" width="100%" autoplay muted></video>
+      <button onclick="startEnrollCamera()">Start Camera</button>
+      <button onclick="enrollStaffFace()">Capture & Save Face</button>
+    </div>
+
+    <!-- STAFF DASHBOARD -->
+    <div id="staffDashboard" style="display:none;">
+      <h2>Welcome, Staff</h2>
+      <button onclick="logout()">Logout</button>
+
+      <h3>Face Verification</h3>
+      <video id="staffVideo" width="100%" autoplay muted></video>
+      <button onclick="startStaffCamera()">Start Camera</button>
+      <button onclick="punchWithFace()">Punch Attendance (Face + Location)</button>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <script>
+    // ========= INITIAL DATA =========
+    let admin = { username:"admin", password:"admin123" };
+    let staffList = [{ id:101, name:"Ravi", password:"1234" }];
+    let attendanceRecords = [];
+    let staffFaces = JSON.parse(localStorage.getItem("staffFaces")) || {}; // face descriptors
+    let locationControl = null;
+
+    // ========= FACE MODELS LOAD =========
+    const MODEL_URL = "https://justadudewhohacks.github.io/face-api.js/models"; 
+    async function loadModels(){
+      await faceapi.nets.ssdMobilenetv1.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      alert("Face models loaded!");
+    }
+    loadModels();
+
+    // ========= LOGIN =========
+    function login(){
+      let user = document.getElementById('username').value;
+      let pass = document.getElementById('password').value;
+      let role = document.getElementById('role').value;
+
+      if(role === "admin"){
+        if(user === admin.username && pass === admin.password){
+          showSection("adminDashboard");
+        } else {
+          alert("Invalid Admin credentials!");
+        }
+      } else if(role === "staff"){
+        let staff = staffList.find(s => s.name===user && s.password===pass);
+        if(staff){
+          localStorage.setItem("currentStaff", staff.name);
+          showSection("staffDashboard");
+        } else {
+          alert("Invalid Staff credentials!");
+        }
+      } else {
+        alert("Select role first!");
+      }
+    }
+
+    // ========= FORGOT ADMIN PASSWORD =========
+    document.getElementById('forgotPassword').addEventListener('click', function(e){
+      e.preventDefault();
+      let role = document.getElementById('role').value;
+      if(role !== "admin"){
+        alert("Password reset is only for Admin. Select 'Admin' role first.");
+        return;
+      }
+      let answer = prompt("Enter new Admin password:");
+      if(!answer) return alert("Cancelled");
+      admin.password = answer;
+      alert("Admin password updated successfully!");
+    });
+
+    // ========= LOGOUT =========
+    function logout(){
+      showSection("loginSection");
+    }
+
+    // ========= SHOW SECTIONS =========
+    function showSection(id){
+      ["loginSection","adminDashboard","staffDashboard"].forEach(s => {
+        document.getElementById(s).style.display="none";
+      });
+      document.getElementById(id).style.display="block";
+    }
+
+    // ========= ADMIN FUNCTIONS =========
+    function addStaff(){
+      let id = prompt("Enter Staff ID:");
+      let name = prompt("Enter Staff Name:");
+      let pass = prompt("Enter Staff Password:");
+      if(id && name && pass){
+        staffList.push({id:id, name:name, password:pass});
+        alert("Staff added successfully!");
+      }
+    }
+
+    function editStaff(){
+      let name = prompt("Enter Staff Name to Edit:");
+      let staff = staffList.find(s => s.name===name);
+      if(staff){
+        let newPass = prompt("Enter New Password for " + name);
+        staff.password = newPass;
+        alert("Staff password updated!");
+      } else {
+        alert("Staff not found!");
+      }
+    }
+
+    function exportAttendance(){
+      if(attendanceRecords.length === 0){
+        alert("No attendance records yet!");
+        return;
+      }
+      let rows = [["Staff Name","Date","Time","Location"]];
+      attendanceRecords.forEach(r => {
+        rows.push([r.name,r.date,r.time,r.location]);
+      });
+
+      let csvContent = "data:text/csv;charset=utf-8," 
+        + rows.map(e => e.join(",")).join("\n");
+
+      let link = document.createElement("a");
+      link.setAttribute("href", encodeURI(csvContent));
+      link.setAttribute("download", "attendance.csv");
+      document.body.appendChild(link);
+      link.click();
+    }
+
+    function updateAdminProfile(){
+      let newName = document.getElementById('newAdminName').value;
+      let newPass = document.getElementById('newAdminPass').value;
+      if(newName) admin.username = newName;
+      if(newPass) admin.password = newPass;
+      alert("Admin profile updated successfully!");
+    }
+
+    function setLocationControl(){
+      let lat = parseFloat(document.getElementById("adminLat").value);
+      let lon = parseFloat(document.getElementById("adminLon").value);
+      let r = parseFloat(document.getElementById("adminRadius").value);
+      locationControl = {lat:lat, lon:lon, radius:r};
+      alert("Location control set!");
+    }
+
+    // ========= FACE ENROLL =========
+    let enrollStream;
+    async function startEnrollCamera(){
+      enrollStream = await navigator.mediaDevices.getUserMedia({video:true});
+      document.getElementById("enrollVideo").srcObject = enrollStream;
+    }
+    async function enrollStaffFace(){
+      const staffName = prompt("Enter staff name to enroll face:");
+      const video = document.getElementById("enrollVideo");
+      const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+      if(detection){
+        staffFaces[staffName] = Array.from(detection.descriptor);
+        localStorage.setItem("staffFaces", JSON.stringify(staffFaces));
+        alert("Face enrolled for " + staffName);
+      } else {
+        alert("Face not detected, try again.");
+      }
+    }
+
+    // ========= STAFF FACE VERIFY =========
+    let staffStream;
+    async function startStaffCamera(){
+      staffStream = await navigator.mediaDevices.getUserMedia({video:true});
+      document.getElementById("staffVideo").srcObject = staffStream;
+    }
+
+    async function punchWithFace(){
+      let staffName = localStorage.getItem("currentStaff");
+      const video = document.getElementById("staffVideo");
+      const detection = await faceapi.detectSingleFace(video).withFaceLandmarks().withFaceDescriptor();
+      if(!detection) return alert("No face detected!");
+
+      let savedDesc = staffFaces[staffName];
+      if(!savedDesc) return alert("Face not enrolled for this staff.");
+
+      const labeled = new faceapi.LabeledFaceDescriptors(staffName, [new Float32Array(savedDesc)]);
+      const matcher = new faceapi.FaceMatcher([labeled], 0.6);
+      const best = matcher.findBestMatch(detection.descriptor);
+
+      if(best.label !== staffName) return alert("Face does not match. Access denied.");
+
+      // check location control
+      navigator.geolocation.getCurrentPosition(function(pos){
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+
+        if(locationControl){
+          let dist = getDistanceFromLatLon(lat, lon, locationControl.lat, locationControl.lon);
+          if(dist > locationControl.radius){
+            return alert("Outside allowed location area! Punch rejected.");
+          }
+        }
+
+        let now = new Date();
+        attendanceRecords.push({
+          name:staffName,
+          date: now.toISOString().split("T")[0],
+          time: now.toLocaleTimeString(),
+          location: lat+","+lon
+        });
+
+        document.getElementById('map').innerHTML =
+          `<iframe width="100%" height="250"
+            src="https://maps.google.com/maps?q=${lat},${lon}&z=15&output=embed">
+          </iframe>`;
+
+        alert("Attendance punched for " + staffName);
+      });
+    }
+
+    // ========= HELPER: DISTANCE =========
+    function getDistanceFromLatLon(lat1, lon1, lat2, lon2){
+      function deg2rad(deg){ return deg * (Math.PI/180); }
+      var R = 6371000; // meters
+      var dLat = deg2rad(lat2-lat1);
+      var dLon = deg2rad(lon2-lon1);
+      var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+      var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+  </script>
+</body>
+</html>
